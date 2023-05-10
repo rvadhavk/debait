@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Custom Extension",
+  "version": "1.0",
+  "description": "A Chrome extension that customizes YouTube",
+  "permissions": ["activeTab", "scripting"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "css": ["stylesheet.css"],
+      "js": ["contentScript.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [ "inject.js" ],
+      "matches": [ "https://*/*" ]
+    }
+  ],
+  "host_permissions": [
+    "*://www.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

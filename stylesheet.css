@@ -1,0 +1,17 @@
+#top-row {
+    flex-wrap: wrap !important;
+    justify-content: space-between !important;
+}
+
+#owner {
+    min-width: 0 !important;
+    flex: 0 1 min-content !important;
+}
+#actions {
+    min-width: 0 !important;
+    flex: 0 0 min-content !important;
+}
+
+#actions-inner {
+    flex-direction: row !important;
+}
