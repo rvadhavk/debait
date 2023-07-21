@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Custom Extension",
+  "name": "Debait",
   "version": "1.0",
-  "description": "A Chrome extension that customizes YouTube",
-  "permissions": ["activeTab", "scripting"],
+  "description": "Summarizes YouTube videos to keep clickbait from wasting your time.",
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*"],
       "css": ["stylesheet.css"],
-      "js": ["contentScript.js"],
+      "js": ["content.js"],
       "run_at": "document_start"
     }
   ],
@@ -19,9 +18,11 @@
     }
   ],
   "host_permissions": [
-    "*://www.youtube.com/*"
+    "*://www.youtube.com/*",
+    "*://chat.openai.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   }
 }

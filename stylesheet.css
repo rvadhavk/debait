@@ -1,17 +1,83 @@
-#top-row {
+/*#top-row {
+    display: flex !important;
     flex-wrap: wrap !important;
     justify-content: space-between !important;
 }
 
 #owner {
     min-width: 0 !important;
-    flex: 0 1 min-content !important;
+    flex: 0 0 auto !important;
 }
+
 #actions {
     min-width: 0 !important;
-    flex: 0 0 min-content !important;
+    flex: 0 0 auto !important;
 }
 
 #actions-inner {
     flex-direction: row !important;
+}
+
+#description {
+    flex: 1 1 max-content !important;
+}
+*/
+
+
+#bottom-row {
+    flex-direction: column !important;
+}
+
+#summary-container {
+    --ytd-text-inline-expander-button-color: var(--yt-spec-text-primary, initial);
+    position: relative;
+    border-radius: 12px;
+    padding: 12px;
+    background: var(--yt-spec-badge-chip-background);
+    min-width: 100%;
+    min-width: max(381px,50% - 12px);
+    flex: 1;
+    flex-basis: 0.000000001px;
+    font-family: "Roboto","Arial",sans-serif;
+    font-size: 1.4rem;
+    line-height: 2rem;
+    font-weight: 400;
+}
+
+#summary-container h3 {
+    font-family: "Roboto","Arial",sans-serif;
+    font-weight: var(--yt-formatted-string-bold-font-weight,500);
+    font-size: 1.4rem;
+}
+
+#summary-container p + h3 {
+    margin-top: 0.5rem;
+}
+
+#summary-container ul {
+    list-style-type: none;
+}
+
+#summary-container li {
+    display: flex;
+    align-items: baseline; /* without this set, if the text next to the anchor wraps, then the anchor element will grow in height to match the text */
+    gap: 0.75ch;
+}
+
+#summary-container a {
+    color: var(--yt-spec-call-to-action);
+    cursor: pointer; /* can't figure out why this is necessary */
+}
+
+.result-streaming::after {
+    animation: blink 1s steps(2, start) infinite;
+    content: "▋";
+    margin-left: .25rem;
+    vertical-align: baseline
+}
+
+@keyframes blink {
+    to {
+        visibility: hidden
+    }
 }
