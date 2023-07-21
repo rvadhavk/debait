@@ -29,7 +29,7 @@ ReadableStream.prototype.asyncForEach = async function(f) {
   }
 };
 
-main().catch(e => console.error(e));
+main();
 
 async function main() {
   const contentScriptClient = new ContentScriptClient('debaiter');
@@ -68,12 +68,11 @@ async function main() {
     el('div', 'Fetching summary...', x => summaryContents = x)
   ]);
 
-  let latestAborter;
+  let aborter;
   dataStream.asyncForEach(async data => {
     try {
-      latestAborter?.abort();
-      const aborter = new AbortController();
-      latestAborter = aborter;
+      aborter?.abort();
+      aborter = new AbortController();
 
       const captionTrack = data.playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.[0];
       if (!captionTrack) {
@@ -82,18 +81,19 @@ async function main() {
       }
       const timedtext = await fetch(captionTrack.baseUrl, { signal: aborter.signal })
         .then(r => r.text());
-      const fragmentStream = (await contentScriptClient.fetch({
+      const eventStream = await contentScriptClient.fetch({
         title: data.playerResponse.videoDetails.title,
         transcript: formatTranscript(timedtext),
-      })).filter(event => event.message?.author.role === 'assistant')
-        .map(event => createFragment(event));
+      });
+      const fragmentStream = eventStream.pipeThrough(new TransformStream({
+        transform(event, controller) {
+          if (event.message?.author.role !== 'assistant') return;
+          controller.enqueue(createFragment(event));
+        }
+      }), { signal: aborter.signal });
       try {
         summaryContents.classList.add('result-streaming');
-        aborter.signal.addEventListener('abort', () => {
-          fragmentStream.cancel('bloop');
-        });
         for await (let fragment of fragmentStream) {
-          if (aborter.signal.aborted) return;
           while (summaryContents.firstChild) {
             summaryContents.firstChild.remove();
           }
@@ -113,21 +113,7 @@ async function main() {
   }
 
   // Maintain the invariant that if #description is on the page, make sure its next sibling is the summary container
-  const domChangeStream = createReadable(writer => {
-    const observer = new MutationObserver(mutations => {
-      writer.write(mutations);
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    writer.closed.finally(() => {
-      observer.disconnect();
-    })
-  });
-  for await (let change of domChangeStream) {
-    const description = document.querySelector('#bottom-row #description');
-    if (description && description.nextSibling !== outline) {
-      description.after(outline);
-    }
-  }
+  mountAfter('#bottom-row #description', outline);
 }
 
 function unescapeHtml(str) {
@@ -151,65 +137,75 @@ function formatTranscript(timedtext) {
 }
 
 
-  function createReadable(f) {
-    let { readable, writable } = new TransformStream();
-    let writer = writable.getWriter();
-    f(writer);
-    return readable;
-  }
+function createReadable(f) {
+  let { readable, writable } = new TransformStream();
+  let writer = writable.getWriter();
+  f(writer);
+  return readable;
+}
 
-  async function waitForElement(selector) {
-    const domChangeStream = createReadable(writer => {
-      const observer = new MutationObserver(mutations => writer.write());
-      observer.observe(document.documentElement, { childList: true, subtree: true });
-      writer.closed.finally(() => {
-        observer.disconnect();
-      });
+async function waitForElement(selector) {
+  const domChangeStream = createReadable(writer => {
+    const observer = new MutationObserver(mutations => writer.write());
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    writer.closed.finally(() => {
+      observer.disconnect();
     });
-    for await (let _ of domChangeStream) {
-      const selectResult = document.querySelector(selector);
-      if (selectResult) return selectResult;
-    }
+  });
+  for await (let _ of domChangeStream) {
+    const selectResult = document.querySelector(selector);
+    if (selectResult) return selectResult;
   }
+}
 
-  function parseSummary(markdown) {
-    let html = unified()
-      .use(remarkParse)
-      .use(remarkGfm)
-      .use(remarkHtml)
-      .processSync(markdown)
-      .toString();
-    const responseDocument = new DOMParser().parseFromString(html, 'text/html');
-    const fragment = document.createDocumentFragment();
-    while (responseDocument.body.firstChild) {
-      fragment.appendChild(responseDocument.body.firstChild);
-    }
-    return DOMPurify.sanitize(fragment, {
-      RETURN_DOM_FRAGMENT: true,
-      ALLOWED_TAGS: ['h3', 'ul', 'li', 'p'],
-      ALLOWED_ATTRS: [],
-    });
+function parseSummary(markdown) {
+  let html = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(remarkHtml)
+    .processSync(markdown)
+    .toString();
+  const responseDocument = new DOMParser().parseFromString(html, 'text/html');
+  const fragment = document.createDocumentFragment();
+  while (responseDocument.body.firstChild) {
+    fragment.appendChild(responseDocument.body.firstChild);
   }
+  return DOMPurify.sanitize(fragment, {
+    RETURN_DOM_FRAGMENT: true,
+    ALLOWED_TAGS: ['h3', 'ul', 'li', 'p'],
+    ALLOWED_ATTRS: [],
+  });
+}
 
-  function addTimestampClickHandlers(fragment) {
-    for (let li of fragment.querySelectorAll('li')) {
-      const match = li.textContent.match(/^\[(.*?)\](.*)$/);
-      if (match == null) return;
-      const [_, timestamp, rest] = match;
-      const seconds = timestamp.split(':')
-        .map(x => parseInt(x))
-        .reduce((acc, value) => acc * 60 + value);
-      let a = el('a', {
-        onclick: event => {
-          const video = document.querySelector('video');
-          video.currentTime = seconds;
-          video.play();
-          window.scrollTo({ top: 0 });
-        }
-      }, timestamp);
-      li.replaceWith(el('li', [
-        a,
-        rest
-      ]));
-    }
+function addTimestampClickHandlers(fragment) {
+  for (let li of fragment.querySelectorAll('li')) {
+    const match = li.textContent.match(/^\[(.*?)\](.*)$/);
+    if (match == null) return;
+    const [_, timestamp, rest] = match;
+    const seconds = timestamp.split(':')
+      .map(x => parseInt(x))
+      .reduce((acc, value) => acc * 60 + value);
+    let a = el('a', {
+      onclick: event => {
+        const video = document.querySelector('video');
+        video.currentTime = seconds;
+        video.play();
+        window.scrollTo({ top: 0 });
+      }
+    }, timestamp);
+    li.replaceWith(el('li', [
+      a,
+      rest
+    ]));
   }
+}
+
+function mountAfter(selector, element) {
+  const observer = new MutationObserver(mutations => {
+    const target = document.querySelector(selector);
+    if (target && target.nextSibling !== element) {
+      target.after(element);
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+}

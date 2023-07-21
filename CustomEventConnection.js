@@ -8,7 +8,7 @@ export class CustomEventClient {
     });
   }
 
-  sendToServer(message) {
+  #sendToServer(message) {
     document.dispatchEvent(new CustomEvent(this.requestEventName, {
       detail: message
     }));
@@ -49,7 +49,6 @@ export class CustomEventClient {
     return readable;
   }
 }
-
 
 export function runCustomEventServer(eventNamePrefix, requestHandler) {
   const requestEventName = eventNamePrefix + '-client-to-server';
