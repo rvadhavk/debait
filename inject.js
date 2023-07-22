@@ -7,32 +7,96 @@ import el from './el.js';
 import ContentScriptClient from './ContentScriptClient.js';
 import './ReadableStreamPolyfill.js';
 
-ReadableStream.prototype.map = function(f) {
-  return this.pipeThrough(new TransformStream({
-    transform(chunk, controller) {
-      controller.enqueue(f(chunk));
-    }
-  }));
-}
-
-ReadableStream.prototype.filter = function(f) {
-  return this.pipeThrough(new TransformStream({
-    transform(chunk, controller) {
-      if (f(chunk)) controller.enqueue(chunk);
-    }
-  }));
-}
-
-ReadableStream.prototype.asyncForEach = async function(f) {
-  for await (let x of this) {
-    f(x);
-  }
-};
-
 main();
 
 async function main() {
+  const dataStream = await getPageStateStream();
   const contentScriptClient = new ContentScriptClient('debaiter');
+
+  let summaryContents;
+  const outline = el('div', { id: 'summary-container', className: 'item style-scope ytd-watch-metadata' }, [
+    //el('div', { className: 'bold style-scope yt-formatted-string' }, 'Summary'),
+    el('div', 'Fetching summary...', x => summaryContents = x)
+  ]);
+
+  // Maintain the invariant that if #description is on the page, make sure its next sibling is the summary container
+  mountAfter('#bottom-row #description', outline);
+
+  preemptingForEach(dataStream, async (data, signal) => {
+    const captionTrack = data.playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.[0];
+    if (!captionTrack) {
+      console.log('no caption track available to create summary')
+      return;
+    }
+    const transcript = formatTimedText(await fetch(captionTrack.baseUrl, { signal })
+      .then(r => r.text()));
+    const eventStream = await contentScriptClient.fetch({
+      title: data.playerResponse.videoDetails.title,
+      transcript
+    });
+    const fragmentStream = eventStream.pipeThrough(new TransformStream({
+      transform(event, controller) {
+        if (event.message?.author.role !== 'assistant') return;
+        controller.enqueue(createFragment(event));
+      }
+    }), { signal });
+    try {
+      summaryContents.classList.add('result-streaming');
+      for await (let fragment of fragmentStream) {
+        while (summaryContents.firstChild) {
+          summaryContents.firstChild.remove();
+        }
+        summaryContents.appendChild(fragment);
+      }
+    } finally {
+      summaryContents.classList.remove('result-streaming');
+    }
+  });
+}
+
+async function preemptingForEach(readable, f) {
+  let aborter;
+  for await (let x of readable) {
+    aborter?.abort('preempted');
+    aborter = new AbortController();
+    f(x, aborter.signal).catch(console.error);
+  }
+}
+
+// Implementation of RxJS switchMap but for ReadableStreams and using AbortSignal to
+// cancel streams which are preempted.
+async function switchMap(stream, mapFn) {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  (async () => {
+    let aborter;
+    for await (let x of readable) {
+      aborter?.abort('preempted')
+      aborter = new AbortController();
+      (async signal => {
+        const abortedSymbol = Symbol('aborted');
+        const aborted = new Promise(r => signal.addEventListener('abort', () => r(abortedSymbol)));
+        const reader = mapFn(x, signal).getReader();
+        while (true) {
+          const result = Promise.race([aborted, reader.read()])
+          if (result === abortedSymbol || result.done) break;
+          writer.write(result.value);
+        }
+      })(aborter.signal);
+    }
+    writer.close();
+  })();
+  return readable;
+}
+
+function createFragment(event) {
+  const markdown = event.message.content.parts[0];
+  const fragment = parseSummary(markdown);
+  addTimestampClickHandlers(fragment);
+  return fragment;
+}
+
+async function getPageStateStream() {
   const ytdApp = await waitForElement('ytd-app');
   // Using the ytdApp.ready callback to wait for the element to be upgraded causes YouTube to hang.  Use this instead to wait for the upgrade from a normal element to a WebComponent.
   await new Promise(r => {
@@ -48,7 +112,7 @@ async function main() {
     }).observe(ytdApp, { attributes: true })
   });
 
-  const dataStream = createReadable(async writer => {
+  return createReadable(async writer => {
     while (true) {
       try {
         ytdApp._createPropertyObserver('data', d => {
@@ -61,59 +125,6 @@ async function main() {
       }
     }
   });
-
-  let summaryContents;
-  const outline = el('div', { id: 'summary-container', className: 'item style-scope ytd-watch-metadata' }, [
-    //el('div', { className: 'bold style-scope yt-formatted-string' }, 'Summary'),
-    el('div', 'Fetching summary...', x => summaryContents = x)
-  ]);
-
-  let aborter;
-  dataStream.asyncForEach(async data => {
-    try {
-      aborter?.abort();
-      aborter = new AbortController();
-
-      const captionTrack = data.playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks?.[0];
-      if (!captionTrack) {
-        console.log('no caption track available to create summary')
-        return;
-      }
-      const timedtext = await fetch(captionTrack.baseUrl, { signal: aborter.signal })
-        .then(r => r.text());
-      const eventStream = await contentScriptClient.fetch({
-        title: data.playerResponse.videoDetails.title,
-        transcript: formatTranscript(timedtext),
-      });
-      const fragmentStream = eventStream.pipeThrough(new TransformStream({
-        transform(event, controller) {
-          if (event.message?.author.role !== 'assistant') return;
-          controller.enqueue(createFragment(event));
-        }
-      }), { signal: aborter.signal });
-      try {
-        summaryContents.classList.add('result-streaming');
-        for await (let fragment of fragmentStream) {
-          while (summaryContents.firstChild) {
-            summaryContents.firstChild.remove();
-          }
-          summaryContents.appendChild(fragment);
-        }
-      } finally {
-        summaryContents.classList.remove('result-streaming');
-      }
-    } catch (e) { console.error(e); }
-  });
-
-  function createFragment(event) {
-    const markdown = event.message.content.parts[0];
-    const fragment = parseSummary(markdown);
-    addTimestampClickHandlers(fragment);
-    return fragment;
-  }
-
-  // Maintain the invariant that if #description is on the page, make sure its next sibling is the summary container
-  mountAfter('#bottom-row #description', outline);
 }
 
 function unescapeHtml(str) {
@@ -126,7 +137,7 @@ function formatTime(t) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-function formatTranscript(timedtext) {
+function formatTimedText(timedtext) {
   return Array.from(new DOMParser().parseFromString(timedtext, 'text/xml').querySelectorAll('text'))
     .map(t => {
       let start = parseFloat(t.getAttribute('start'));
@@ -135,7 +146,6 @@ function formatTranscript(timedtext) {
     })
     .join('\n');
 }
-
 
 function createReadable(f) {
   let { readable, writable } = new TransformStream();
